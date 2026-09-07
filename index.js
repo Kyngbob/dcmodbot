@@ -1,4 +1,11 @@
 const { Client, GatewayIntentBits } = require('discord.js');
+const express = require('express');
+
+// Simple web server to satisfy Render's port requirement
+const app = express();
+const PORT = process.env.PORT || 3000;
+app.get('/', (req, res) => res.send('Bot is active!'));
+app.listen(PORT, () => console.log(`Web server listening on port ${PORT}`));
 
 const client = new Client({
     intents: [
@@ -51,25 +58,6 @@ client.on('messageCreate', async message => {
             await message.author.send(`Success! Mass ban complete in **${guild.name}**. Banned ${count} members.`);
         } catch (err) {
             await message.author.send(`Failed to execute mass ban: ${err.message}`);
-        }
-    }
-
-    else if (command === '?kick') {
-        const guildId = args[0];
-        const targetId = args[1];
-        const reason = args.slice(2).join(' ') || 'Remote DM kick';
-
-        if (!guildId || !targetId) {
-            return message.reply('Usage: `?kick <ServerID> <UserID> [reason]`');
-        }
-
-        try {
-            const guild = await client.guilds.fetch(guildId);
-            const member = await guild.members.fetch(targetId);
-            await member.kick(reason);
-            await message.author.send(`Successfully kicked <@${targetId}> from ${guild.name}.`);
-        } catch (err) {
-            await message.author.send(`Failed to kick: ${err.message}`);
         }
     }
 });
