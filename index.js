@@ -93,10 +93,23 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   new SlashCommandBuilder()
-    .setName('setadmin')
-    .setDescription('Set the admin role for bot management')
-    .addRoleOption(opt => opt.setName('role').setDescription('Role allowed to run admin commands').setRequired(true))
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    .setName('adminrole')
+    .setDescription('Manage bot admin roles')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addSubcommand(sub =>
+      sub.setName('add')
+        .setDescription('Add an admin role')
+        .addRoleOption(opt => opt.setName('role').setDescription('Role to grant admin access').setRequired(true))
+    )
+    .addSubcommand(sub =>
+      sub.setName('del')
+        .setDescription('Remove an admin role')
+        .addRoleOption(opt => opt.setName('role').setDescription('Role to revoke admin access').setRequired(true))
+    )
+    .addSubcommand(sub =>
+      sub.setName('list')
+        .setDescription('List all configured admin roles')
+    ),
 
   new SlashCommandBuilder()
     .setName('settings')
@@ -137,11 +150,11 @@ async function sendLog(guild, embed) {
   }
 }
 
-// Helper to verify admin authority
+// Helper to verify admin authority across multiple roles
 function isAdmin(interaction) {
   if (interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return true;
-  const adminRoleId = settingsCache[interaction.guild.id]?.adminRoleId;
-  return adminRoleId ? interaction.member.roles.cache.has(adminRoleId) : false;
+  const adminRoleIds = settingsCache[interaction.guild.id]?.adminRoleIds || [];
+  return adminRoleIds.some(roleId => interaction.member.roles.cache.has(roleId));
 }
 
 // ------------------------------------------------------------------
@@ -166,6 +179,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   const { commandName, options, guild, member } = interaction;
   if (!settingsCache[guild.id]) settingsCache[guild.id] = {};
+  if (!settingsCache[guild.id].adminRoleIds) settingsCache[guild.id].adminRoleIds = [];
 
   try {
     // COMMAND: /setlogs
@@ -180,29 +194,68 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.reply({ content: `✅ Log channel updated to ${channel}.`, flags: MessageFlags.Ephemeral });
     }
 
-    // COMMAND: /setadmin
-    if (commandName === 'setadmin') {
+    // COMMAND GROUP: /adminrole (add, del, list)
+    if (commandName === 'adminrole') {
       if (!isAdmin(interaction)) {
-        return interaction.reply({ content: '❌ You lack permission to configure settings.', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '❌ You lack permission to manage admin roles.', flags: MessageFlags.Ephemeral });
       }
-      const role = options.getRole('role');
-      settingsCache[guild.id].adminRoleId = role.id;
-      await saveSettings(settingsCache);
 
-      return interaction.reply({ content: `✅ Admin role set to **${role.name}**.`, flags: MessageFlags.Ephemeral });
+      const subcommand = options.getSubcommand();
+      const currentAdminRoles = settingsCache[guild.id].adminRoleIds;
+
+      if (subcommand === 'add') {
+        const role = options.getRole('role');
+
+        if (currentAdminRoles.includes(role.id)) {
+          return interaction.reply({ content: `⚠️ **${role.name}** is already registered as an admin role.`, flags: MessageFlags.Ephemeral });
+        }
+
+        currentAdminRoles.push(role.id);
+        await saveSettings(settingsCache);
+
+        return interaction.reply({ content: `✅ Added **${role.name}** to admin roles.`, flags: MessageFlags.Ephemeral });
+      }
+
+      if (subcommand === 'del') {
+        const role = options.getRole('role');
+
+        if (!currentAdminRoles.includes(role.id)) {
+          return interaction.reply({ content: `⚠️ **${role.name}** is not currently an admin role.`, flags: MessageFlags.Ephemeral });
+        }
+
+        settingsCache[guild.id].adminRoleIds = currentAdminRoles.filter(id => id !== role.id);
+        await saveSettings(settingsCache);
+
+        return interaction.reply({ content: `🗑️ Removed **${role.name}** from admin roles.`, flags: MessageFlags.Ephemeral });
+      }
+
+      if (subcommand === 'list') {
+        const roleMentions = currentAdminRoles.length > 0
+          ? currentAdminRoles.map(id => `<@&${id}>`).join('\n')
+          : 'No admin roles configured.';
+
+        const embed = new EmbedBuilder()
+          .setTitle(`🔑 Admin Roles for ${guild.name}`)
+          .setDescription(roleMentions)
+          .setColor('#5865F2');
+
+        return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      }
     }
 
     // COMMAND: /settings
     if (commandName === 'settings') {
       const config = settingsCache[guild.id] || {};
       const logChannel = config.logChannelId ? `<#${config.logChannelId}>` : 'Not set';
-      const adminRole = config.adminRoleId ? `<@&${config.adminRoleId}>` : 'Not set';
+      const adminRoles = config.adminRoleIds && config.adminRoleIds.length > 0
+        ? config.adminRoleIds.map(id => `<@&${id}>`).join(', ')
+        : 'Not set';
 
       const embed = new EmbedBuilder()
         .setTitle(`⚙️ Configuration for ${guild.name}`)
         .addFields(
           { name: 'Log Channel', value: logChannel, inline: true },
-          { name: 'Admin Role', value: adminRole, inline: true }
+          { name: 'Admin Roles', value: adminRoles, inline: true }
         )
         .setColor('#5865F2');
 
