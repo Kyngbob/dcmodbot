@@ -118,6 +118,27 @@ const commands = [
     ),
 
   new SlashCommandBuilder()
+    .setName('warn')
+    .setDescription('Manage user warnings')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+    .addSubcommand(sub =>
+      sub.setName('add')
+        .setDescription('Issue a warning to a user')
+        .addUserOption(opt => opt.setName('target').setDescription('User to warn').setRequired(true))
+        .addStringOption(opt => opt.setName('reason').setDescription('Reason for the warning').setRequired(true))
+    )
+    .addSubcommand(sub =>
+      sub.setName('list')
+        .setDescription('List warnings for a user')
+        .addUserOption(opt => opt.setName('target').setDescription('User to check').setRequired(true))
+    )
+    .addSubcommand(sub =>
+      sub.setName('clear')
+        .setDescription('Clear all warnings for a user')
+        .addUserOption(opt => opt.setName('target').setDescription('User to clear warnings for').setRequired(true))
+    ),
+
+  new SlashCommandBuilder()
     .setName('roles')
     .setDescription('List all roles in the server'),
 
@@ -160,7 +181,7 @@ async function sendLog(guild, embed) {
   }
 }
 
-// Helper to verify admin authority across legacy single role and multiple roles array
+// Helper to verify admin authority
 function isAdmin(interaction) {
   if (interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return true;
   const config = settingsCache[interaction.guild.id] || {};
@@ -196,6 +217,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const { commandName, options, guild, member } = interaction;
   if (!settingsCache[guild.id]) settingsCache[guild.id] = {};
   if (!settingsCache[guild.id].adminRoleIds) settingsCache[guild.id].adminRoleIds = [];
+  if (!settingsCache[guild.id].warnings) settingsCache[guild.id].warnings = {};
 
   try {
     // COMMAND: /setlogs
@@ -273,6 +295,85 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setColor('#5865F2');
 
         return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      }
+    }
+
+    // COMMAND GROUP: /warn (add, list, clear)
+    if (commandName === 'warn') {
+      if (!isAdmin(interaction) && !member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+        return interaction.reply({ content: '❌ You lack permission to manage warnings.', flags: MessageFlags.Ephemeral });
+      }
+
+      const subcommand = options.getSubcommand();
+      const targetUser = options.getUser('target');
+      const userId = targetUser.id;
+
+      if (!settingsCache[guild.id].warnings[userId]) {
+        settingsCache[guild.id].warnings[userId] = [];
+      }
+      const userWarnings = settingsCache[guild.id].warnings[userId];
+
+      if (subcommand === 'add') {
+        const reason = options.getString('reason');
+        const warningEntry = {
+          reason,
+          moderator: interaction.user.tag,
+          date: new Date().toISOString()
+        };
+
+        userWarnings.push(warningEntry);
+        await saveSettings(settingsCache);
+
+        await interaction.reply({ content: `⚠️ Issued warning to **${targetUser.tag}**. Total warnings: **${userWarnings.length}**`, flags: MessageFlags.Ephemeral });
+
+        // Try to DM the user
+        try {
+          await targetUser.send(`⚠️ You have received a warning in **${guild.name}**. Reason: ${reason}`);
+        } catch (dmErr) {
+          console.log(`[DM Warning] Could not DM user ${targetUser.tag}`);
+        }
+
+        // Log warning
+        const logEmbed = new EmbedBuilder()
+          .setTitle('⚠️ User Warned')
+          .addFields(
+            { name: 'User', value: `${targetUser.tag} (${targetUser.id})` },
+            { name: 'Moderator', value: interaction.user.tag },
+            { name: 'Reason', value: reason },
+            { name: 'Total Warnings', value: `${userWarnings.length}` }
+          )
+          .setColor('#F39C12')
+          .setTimestamp();
+        return sendLog(guild, logEmbed);
+      }
+
+      if (subcommand === 'list') {
+        if (userWarnings.length === 0) {
+          return interaction.reply({ content: `✅ **${targetUser.tag}** has no active warnings.`, flags: MessageFlags.Ephemeral });
+        }
+
+        const warningListDesc = userWarnings.map((w, index) => 
+          `**#${index + 1}** | Reason: ${w.reason}\n*Moderator: ${w.moderator}*`
+        ).join('\n\n');
+
+        const embed = new EmbedBuilder()
+          .setTitle(`⚠️ Warnings for ${targetUser.tag}`)
+          .setDescription(warningListDesc)
+          .setColor('#F39C12')
+          .setTimestamp();
+
+        return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      }
+
+      if (subcommand === 'clear') {
+        if (userWarnings.length === 0) {
+          return interaction.reply({ content: `ℹ️ **${targetUser.tag}** has no warnings to clear.`, flags: MessageFlags.Ephemeral });
+        }
+
+        settingsCache[guild.id].warnings[userId] = [];
+        await saveSettings(settingsCache);
+
+        return interaction.reply({ content: `🗑️ Cleared all warnings for **${targetUser.tag}**.`, flags: MessageFlags.Ephemeral });
       }
     }
 
