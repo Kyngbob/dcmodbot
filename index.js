@@ -217,9 +217,23 @@ const commands = [
   new SlashCommandBuilder()
     .setName('role')
     .setDescription('Role utilities')
-    .addSubcommand(s => s.setName('give').setDescription('Assign role to user').addUserOption(o => o.setName('user').setRequired(true)).addRoleOption(o => o.setName('role').setRequired(true)))
-    .addSubcommand(s => s.setName('remove').setDescription('Remove role from user').addUserOption(o => o.setName('user').setRequired(true)).addRoleOption(o => o.setName('role').setRequired(true)))
-    .addSubcommand(s => s.setName('info').setDescription('View role information').addRoleOption(o => o.setName('role').setRequired(true))),
+    .addSubcommand(s => 
+      s.setName('give')
+       .setDescription('Assign role to user')
+       .addUserOption(o => o.setName('user').setDescription('Target user').setRequired(true))
+       .addRoleOption(o => o.setName('role').setDescription('Role to give').setRequired(true))
+    )
+    .addSubcommand(s => 
+      s.setName('remove')
+       .setDescription('Remove role from user')
+       .addUserOption(o => o.setName('user').setDescription('Target user').setRequired(true))
+       .addRoleOption(o => o.setName('role').setDescription('Role to remove').setRequired(true))
+    )
+    .addSubcommand(s => 
+      s.setName('info')
+       .setDescription('View role information')
+       .addRoleOption(o => o.setName('role').setDescription('Target role').setRequired(true))
+    ),
 
   // Logging Setup & Utilities
   new SlashCommandBuilder().setName('setlogs').setDescription('Set the central audit log channel').addChannelOption(o => o.setName('channel').setDescription('Log channel').setRequired(true)),
