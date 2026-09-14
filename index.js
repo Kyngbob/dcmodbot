@@ -15,6 +15,16 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const https = require('https');
+const http = require('http');
+
+// Simple Web Server to satisfy Render Health Checks
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Bot is running!');
+}).listen(PORT, () => {
+  console.log(`Web server listening on port ${PORT}`);
+});
 
 const client = new Client({
   intents: [
@@ -146,7 +156,9 @@ async function sendModDM(user, guild, action, reason, duration = null, moderator
     embed.addFields({ name: 'Duration', value: duration, inline: true });
   }
 
-  await user.send({ embeds: [embed] }).catch(() => {});
+  await user.send({ embeds: [embed] }).catch(() => {
+    // Fails silently if user has DMs disabled
+  });
 }
 
 // Log Helper Function
@@ -312,66 +324,7 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: 'Lockdown initiated. Restricting guild operations...', ephemeral: true });
     }
 
-    // Config Commands
-    if (commandName === 'setlogs') {
-      if (!hasPermission(interaction, PermissionFlagsBits.Administrator)) return interaction.reply({ content: 'No permission.', ephemeral: true });
-      cfg.logChannel = options.getChannel('channel').id;
-      saveGist();
-      return interaction.reply({ content: `Log channel set to <#${cfg.logChannel}>`, ephemeral: true });
-    }
-
-    if (commandName === 'setadmin') {
-      if (!hasPermission(interaction, PermissionFlagsBits.Administrator)) return interaction.reply({ content: 'No permission.', ephemeral: true });
-      const role = options.getRole('role');
-      if (!cfg.adminRoles.includes(role.id)) cfg.adminRoles.push(role.id);
-      saveGist();
-      return interaction.reply({ content: `Set primary admin role to **${role.name}**.`, ephemeral: true });
-    }
-
-    if (commandName === 'adminrole') {
-      if (!hasPermission(interaction, PermissionFlagsBits.Administrator)) return interaction.reply({ content: 'No permission.', ephemeral: true });
-      const sub = options.getSubcommand();
-      if (sub === 'add') {
-        const role = options.getRole('role');
-        if (!cfg.adminRoles.includes(role.id)) cfg.adminRoles.push(role.id);
-        saveGist();
-        return interaction.reply({ content: `Added **${role.name}** to admin roles.`, ephemeral: true });
-      }
-      if (sub === 'del') {
-        const role = options.getRole('role');
-        cfg.adminRoles = cfg.adminRoles.filter(id => id !== role.id);
-        saveGist();
-        return interaction.reply({ content: `Removed **${role.name}** from admin roles.`, ephemeral: true });
-      }
-      if (sub === 'list') {
-        const roles = cfg.adminRoles.map(id => `<@&${id}>`).join(', ') || 'None';
-        return interaction.reply({ content: `**Admin Roles:** ${roles}`, ephemeral: true });
-      }
-    }
-
-    if (commandName === 'automod') {
-      if (!hasPermission(interaction, PermissionFlagsBits.Administrator)) return interaction.reply({ content: 'No permission.', ephemeral: true });
-      const filter = options.getString('filter');
-      const enabled = options.getBoolean('enabled');
-      cfg.autoMod[filter] = enabled;
-      saveGist();
-      return interaction.reply({ content: `AutoMod filter \`${filter}\` set to **${enabled}**.`, ephemeral: true });
-    }
-
-    if (commandName === 'settings') {
-      if (!hasPermission(interaction, PermissionFlagsBits.Administrator)) return interaction.reply({ content: 'No permission.', ephemeral: true });
-      const embed = new EmbedBuilder()
-        .setTitle('⚙️ Server Settings')
-        .setColor('#2B2D31')
-        .addFields(
-          { name: 'Log Channel', value: cfg.logChannel ? `<#${cfg.logChannel}>` : 'Not set', inline: true },
-          { name: 'Admin Roles', value: cfg.adminRoles.length ? cfg.adminRoles.map(r => `<@&${r}>`).join(', ') : 'None', inline: true },
-          { name: 'AutoMod Filters', value: `Invites: ${cfg.autoMod.invite} | Caps: ${cfg.autoMod.caps} | Mentions: ${cfg.autoMod.mentions}`, inline: false }
-        );
-      return interaction.reply({ embeds: [embed], ephemeral: true });
-    }
-
-    // Moderation
+    // --- MODERATION COMMANDS WITH DM & LOGS ---
     if (commandName === 'warn') {
       if (!hasPermission(interaction, PermissionFlagsBits.ModerateMembers)) return interaction.reply({ content: 'No permission.', ephemeral: true });
       const sub = options.getSubcommand();
@@ -389,7 +342,7 @@ client.on('interactionCreate', async (interaction) => {
       if (sub === 'list') {
         const userWarns = cfg.warnings[target.id] || [];
         if (userWarns.length === 0) return interaction.reply({ content: `**${target.tag}** has no warnings.`, ephemeral: true });
-        const list = userWarns.map((w, i) => `\`#${i + 1}\` | Mod: <@${w.moderator}> | Reason: ${w.reason}`).join('\n');
+        const list = userWarns.map((w, i) => `#${i + 1} | Mod: <@${w.moderator}> | Reason: ${w.reason}`).join('\n');
         return interaction.reply({ content: `**Warnings for ${target.tag}:**\n${list}` });
       }
       if (sub === 'clear') {
@@ -402,13 +355,13 @@ client.on('interactionCreate', async (interaction) => {
     if (commandName === 'unwarn') {
       if (!hasPermission(interaction, PermissionFlagsBits.ModerateMembers)) return interaction.reply({ content: 'No permission.', ephemeral: true });
       const target = options.getUser('target');
-      const index = options.getInteger('warning') - 1;
-      if (!cfg.warnings[target.id] || !cfg.warnings[target.id][index]) {
-        return interaction.reply({ content: 'Invalid warning index.', ephemeral: true });
-      }
-      cfg.warnings[target.id].splice(index, 1);
+      const warningIdx = options.getInteger('warning') - 1;
+      const userWarns = cfg.warnings[target.id] || [];
+
+      if (warningIdx < 0 || warningIdx >= userWarns.length) return interaction.reply({ content: 'Invalid warning index.', ephemeral: true });
+      userWarns.splice(warningIdx, 1);
       saveGist();
-      return interaction.reply({ content: `Removed warning #${index + 1} from **${target.tag}**.` });
+      return interaction.reply({ content: `Removed warning #${warningIdx + 1} from **${target.tag}**.` });
     }
 
     if (commandName === 'kick') {
@@ -437,6 +390,7 @@ client.on('interactionCreate', async (interaction) => {
       if (!hasPermission(interaction, PermissionFlagsBits.BanMembers)) return interaction.reply({ content: 'No permission.', ephemeral: true });
       const userId = options.getString('user_id');
       const reason = options.getString('reason') || 'No reason provided';
+
       await guild.members.unban(userId, reason).catch(() => null);
       return interaction.reply({ content: `Unbanned user ID **${userId}**.` });
     }
@@ -455,12 +409,14 @@ client.on('interactionCreate', async (interaction) => {
     if (commandName === 'massban') {
       if (!hasPermission(interaction, PermissionFlagsBits.BanMembers)) return interaction.reply({ content: 'No permission.', ephemeral: true });
       const ids = options.getString('ids').split(/\s+/);
-      const reason = options.getString('reason') || 'Massban';
+      const reason = options.getString('reason') || 'Massban executed';
+
       let count = 0;
       for (const id of ids) {
-        if (await guild.members.ban(id, { reason }).catch(() => null)) count++;
+        const banned = await guild.members.ban(id, { reason }).catch(() => null);
+        if (banned) count++;
       }
-      return interaction.reply({ content: `Successfully massbanned ${count} users.` });
+      return interaction.reply({ content: `Successfully banned ${count} users.` });
     }
 
     if (commandName === 'timeout') {
@@ -488,51 +444,64 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: `Removed timeout from **${target.tag}**` });
     }
 
-    if (commandName === 'purge') {
-      if (!hasPermission(interaction, PermissionFlagsBits.ManageMessages)) return interaction.reply({ content: 'No permission.', ephemeral: true });
-      let amount = options.getInteger('amount');
-      if (amount > 1000) amount = 1000;
-      await interaction.deferReply({ ephemeral: true });
-      let deletedTotal = 0;
-      while (amount > 0) {
-        const fetchSize = amount > 100 ? 100 : amount;
-        const deleted = await interaction.channel.bulkDelete(fetchSize, true).catch(() => null);
-        if (!deleted || deleted.size === 0) break;
-        deletedTotal += deleted.size;
-        amount -= fetchSize;
-      }
-      return interaction.editReply({ content: `Purged ${deletedTotal} messages.` });
+    // Config Commands
+    if (commandName === 'setlogs') {
+      if (!hasPermission(interaction, PermissionFlagsBits.Administrator)) return interaction.reply({ content: 'No permission.', ephemeral: true });
+      cfg.logChannel = options.getChannel('channel').id;
+      saveGist();
+      return interaction.reply({ content: `Log channel set to <#${cfg.logChannel}>`, ephemeral: true });
     }
 
-    // Channels, Roles & Utilities
-    if (commandName === 'lock') {
-      if (!hasPermission(interaction, PermissionFlagsBits.ManageChannels)) return interaction.reply({ content: 'No permission.', ephemeral: true });
-      const channel = options.getChannel('channel') || interaction.channel;
-      await channel.permissionOverwrites.edit(guild.roles.everyone, { SendMessages: false });
-      return interaction.reply({ content: `Locked <#${channel.id}>.` });
+    if (commandName === 'setadmin') {
+      if (!hasPermission(interaction, PermissionFlagsBits.Administrator)) return interaction.reply({ content: 'No permission.', ephemeral: true });
+      const role = options.getRole('role');
+      if (!cfg.adminRoles.includes(role.id)) cfg.adminRoles.push(role.id);
+      saveGist();
+      return interaction.reply({ content: `Added <@&${role.id}> as admin role.`, ephemeral: true });
     }
 
-    if (commandName === 'unlock') {
-      if (!hasPermission(interaction, PermissionFlagsBits.ManageChannels)) return interaction.reply({ content: 'No permission.', ephemeral: true });
-      const channel = options.getChannel('channel') || interaction.channel;
-      await channel.permissionOverwrites.edit(guild.roles.everyone, { SendMessages: null });
-      return interaction.reply({ content: `Unlocked <#${channel.id}>.` });
-    }
-
-    if (commandName === 'sticky') {
-      if (!hasPermission(interaction, PermissionFlagsBits.ManageMessages)) return interaction.reply({ content: 'No permission.', ephemeral: true });
+    if (commandName === 'adminrole') {
+      if (!hasPermission(interaction, PermissionFlagsBits.Administrator)) return interaction.reply({ content: 'No permission.', ephemeral: true });
       const sub = options.getSubcommand();
-      if (sub === 'set') {
-        const text = options.getString('message');
-        cfg.stickyMessages[interaction.channel.id] = { text, lastMessageId: null };
+      if (sub === 'add') {
+        const role = options.getRole('role');
+        if (!cfg.adminRoles.includes(role.id)) cfg.adminRoles.push(role.id);
         saveGist();
-        return interaction.reply({ content: 'Sticky message enabled for this channel.', ephemeral: true });
+        return interaction.reply({ content: `Added <@&${role.id}> to admin roles.`, ephemeral: true });
       }
-      if (sub === 'clear') {
-        delete cfg.stickyMessages[interaction.channel.id];
+      if (sub === 'del') {
+        const role = options.getRole('role');
+        cfg.adminRoles = cfg.adminRoles.filter(id => id !== role.id);
         saveGist();
-        return interaction.reply({ content: 'Sticky message cleared for this channel.', ephemeral: true });
+        return interaction.reply({ content: `Removed <@&${role.id}> from admin roles.`, ephemeral: true });
       }
+      if (sub === 'list') {
+        const list = cfg.adminRoles.map(id => `<@&${id}>`).join('\n') || 'None configured.';
+        return interaction.reply({ content: `**Admin Roles:**\n${list}`, ephemeral: true });
+      }
+    }
+
+    if (commandName === 'automod') {
+      if (!hasPermission(interaction, PermissionFlagsBits.Administrator)) return interaction.reply({ content: 'No permission.', ephemeral: true });
+      const filter = options.getString('filter');
+      const enabled = options.getBoolean('enabled');
+      cfg.autoMod[filter] = enabled;
+      saveGist();
+      return interaction.reply({ content: `AutoMod filter \`${filter}\` set to **${enabled}**.`, ephemeral: true });
+    }
+
+    if (commandName === 'settings') {
+      if (!hasPermission(interaction, PermissionFlagsBits.Administrator)) return interaction.reply({ content: 'No permission.', ephemeral: true });
+      const embed = new EmbedBuilder()
+        .setTitle('⚙️ Server Bot Configuration')
+        .setColor('#2B2D31')
+        .addFields(
+          { name: 'Log Channel', value: cfg.logChannel ? `<#${cfg.logChannel}>` : 'None', inline: true },
+          { name: 'Suggestions Channel', value: cfg.suggestionsChannel ? `<#${cfg.suggestionsChannel}>` : 'None', inline: true },
+          { name: 'Tickets Panel Channel', value: cfg.ticketsChannel ? `<#${cfg.ticketsChannel}>` : 'None', inline: true },
+          { name: 'AutoMod Filters', value: `Invites: ${cfg.autoMod.invite ? '✅' : '❌'}\nCaps: ${cfg.autoMod.caps ? '✅' : '❌'}\nMentions: ${cfg.autoMod.mentions ? '✅' : '❌'}`, inline: false }
+        );
+      return interaction.reply({ embeds: [embed], ephemeral: true });
     }
 
     if (commandName === 'setsuggestions') {
@@ -598,6 +567,52 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: 'Ticket panel posted!', ephemeral: true });
     }
 
+    if (commandName === 'lock') {
+      if (!hasPermission(interaction, PermissionFlagsBits.ManageChannels)) return interaction.reply({ content: 'No permission.', ephemeral: true });
+      const chan = options.getChannel('channel') || interaction.channel;
+      await chan.permissionOverwrites.edit(guild.roles.everyone, { SendMessages: false });
+      return interaction.reply({ content: `Locked <#${chan.id}>.` });
+    }
+
+    if (commandName === 'unlock') {
+      if (!hasPermission(interaction, PermissionFlagsBits.ManageChannels)) return interaction.reply({ content: 'No permission.', ephemeral: true });
+      const chan = options.getChannel('channel') || interaction.channel;
+      await chan.permissionOverwrites.edit(guild.roles.everyone, { SendMessages: true });
+      return interaction.reply({ content: `Unlocked <#${chan.id}>.` });
+    }
+
+    if (commandName === 'sticky') {
+      if (!hasPermission(interaction, PermissionFlagsBits.ManageMessages)) return interaction.reply({ content: 'No permission.', ephemeral: true });
+      const sub = options.getSubcommand();
+      if (sub === 'set') {
+        const text = options.getString('message');
+        cfg.stickyMessages[interaction.channelId] = { text, lastMessageId: null };
+        saveGist();
+        return interaction.reply({ content: 'Sticky message enabled for this channel.', ephemeral: true });
+      }
+      if (sub === 'clear') {
+        delete cfg.stickyMessages[interaction.channelId];
+        saveGist();
+        return interaction.reply({ content: 'Sticky message cleared from this channel.', ephemeral: true });
+      }
+    }
+
+    if (commandName === 'purge') {
+      if (!hasPermission(interaction, PermissionFlagsBits.ManageMessages)) return interaction.reply({ content: 'No permission.', ephemeral: true });
+      let amount = options.getInteger('amount');
+      if (amount > 1000) amount = 1000;
+      await interaction.deferReply({ ephemeral: true });
+      let deletedTotal = 0;
+      while (amount > 0) {
+        const fetchSize = amount > 100 ? 100 : amount;
+        const deleted = await interaction.channel.bulkDelete(fetchSize, true).catch(() => null);
+        if (!deleted || deleted.size === 0) break;
+        deletedTotal += deleted.size;
+        amount -= fetchSize;
+      }
+      return interaction.editReply({ content: `Purged ${deletedTotal} messages.` });
+    }
+
     if (commandName === 'embed') {
       const title = options.getString('title');
       const desc = options.getString('description');
@@ -611,7 +626,12 @@ client.on('interactionCreate', async (interaction) => {
 
     if (commandName === 'poll') {
       const question = options.getString('question');
-      const embed = new EmbedBuilder().setTitle('📊 Poll').setDescription(question).setColor('#5865F2').setFooter({ text: `Created by ${user.tag}` });
+      const embed = new EmbedBuilder()
+        .setTitle('📊 Poll')
+        .setDescription(question)
+        .setColor('#5865F2')
+        .setAuthor({ name: user.tag, iconURL: user.displayAvatarURL() });
+
       const msg = await interaction.reply({ embeds: [embed], fetchReply: true });
       await msg.react('👍');
       await msg.react('👎');
@@ -622,14 +642,14 @@ client.on('interactionCreate', async (interaction) => {
       const target = options.getUser('target') || user;
       const member = guild.members.cache.get(target.id);
       const embed = new EmbedBuilder()
-        .setTitle(`User Info - ${target.tag}`)
+        .setTitle(`User Info: ${target.tag}`)
         .setThumbnail(target.displayAvatarURL())
+        .setColor('#2B2D31')
         .addFields(
-          { name: 'ID', value: target.id, inline: true },
-          { name: 'Joined Guild', value: member ? `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>` : 'N/A', inline: true },
-          { name: 'Account Created', value: `<t:${Math.floor(target.createdTimestamp / 1000)}:R>`, inline: true }
-        )
-        .setColor('#2B2D31');
+          { name: 'User ID', value: target.id, inline: true },
+          { name: 'Created At', value: `<t:${Math.floor(target.createdTimestamp / 1000)}:R>`, inline: true },
+          { name: 'Joined Server', value: member ? `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>` : 'Unknown', inline: true }
+        );
       return interaction.reply({ embeds: [embed] });
     }
 
@@ -709,16 +729,16 @@ client.on('interactionCreate', async (interaction) => {
     if (customId === 'ticket_transcript') {
       const msgs = await interaction.channel.messages.fetch({ limit: 100 });
       const transcript = msgs.reverse().map(m => `[${m.createdAt.toISOString()}] ${m.author.tag}: ${m.cleanContent}`).join('\n');
-      const attachment = new AttachmentBuilder(Buffer.from(transcript), { name: `transcript-${interaction.channel.name}.txt` });
+      
+      const buffer = Buffer.from(transcript, 'utf-8');
+      const attachment = new AttachmentBuilder(buffer, { name: `${interaction.channel.name}-transcript.txt` });
 
       if (cfg.ticketsLogChannel) {
         const logChan = guild.channels.cache.get(cfg.ticketsLogChannel);
-        if (logChan) {
-          await logChan.send({ content: `Transcript for **${interaction.channel.name}**:`, files: [attachment] }).catch(() => {});
-        }
+        if (logChan) await logChan.send({ content: `Transcript for **${interaction.channel.name}**:`, files: [attachment] });
       }
 
-      return interaction.reply({ content: 'Transcript generated and logged!', files: [attachment], ephemeral: true });
+      return interaction.reply({ content: 'Transcript generated and saved to logs channel!', ephemeral: true });
     }
   }
 
@@ -726,52 +746,45 @@ client.on('interactionCreate', async (interaction) => {
   // 3. SELECT MENU HANDLER
   // ----------------------------------------
   if (interaction.isStringSelectMenu()) {
-    const { customId, guild, member } = interaction;
+    const { customId, guild, member, values } = interaction;
 
     if (customId === 'ticket_select_type') {
       cfg.ticketCounter = (cfg.ticketCounter || 0) + 1;
       saveGist();
 
-      const topicType = interaction.values[0];
-      const categoryId = cfg.ticketsCategory;
+      const type = values[0];
+      const chanName = `ticket-${type}-${cfg.ticketCounter}`;
+
+      const category = cfg.ticketsCategory ? guild.channels.cache.get(cfg.ticketsCategory) : null;
 
       const overwrites = [
-        {
-          id: guild.roles.everyone.id,
-          deny: [PermissionsBitField.Flags.ViewChannel]
-        },
-        {
-          id: member.id,
-          allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
-        }
+        { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+        { id: member.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.AttachFiles] }
       ];
 
       if (cfg.ticketsRole) {
-        overwrites.push({
-          id: cfg.ticketsRole,
-          allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
-        });
+        overwrites.push({ id: cfg.ticketsRole, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.AttachFiles] });
       }
 
       const ticketChan = await guild.channels.create({
-        name: `ticket-${cfg.ticketCounter}-${topicType}`,
+        name: chanName,
         type: ChannelType.GuildText,
-        parent: categoryId || null,
+        parent: category ? category.id : null,
         permissionOverwrites: overwrites
       });
 
       const embed = new EmbedBuilder()
-        .setTitle(`🎫 Ticket #${cfg.ticketCounter} - ${topicType.toUpperCase()}`)
-        .setDescription(`Hello ${member}, support staff will assist you shortly. Please explain your issue in detail.`)
+        .setTitle(`Support Ticket: ${type.toUpperCase()}`)
+        .setDescription(`Hello ${member}, support staff will be with you shortly.\n\nUse the buttons below to close or save a transcript of this ticket.`)
         .setColor('#5865F2');
 
       const buttons = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('ticket_close').setLabel('Close Ticket 🔒').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('ticket_transcript').setLabel('Transcript 📄').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('ticket_transcript').setLabel('Save Transcript 📄').setStyle(ButtonStyle.Secondary)
       );
 
-      await ticketChan.send({ content: `${member} ${cfg.ticketsRole ? `<@&${cfg.ticketsRole}>` : ''}`, embeds: [embed], components: [buttons] });
-      return interaction.reply({ content: `Ticket created: <#${ticketChan.id}>`, ephemeral: true });
+      await ticketChan.send({ content: `${member} <@&${cfg.ticketsRole}>`, embeds: [embed], components: [buttons] });
+      return interaction.reply({ content: `Ticket created! Head over to ${ticketChan}`, ephemeral: true });
     }
   }
 });
