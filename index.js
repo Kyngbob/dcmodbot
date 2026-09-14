@@ -70,7 +70,9 @@ function loadGist() {
       try {
         const parsed = JSON.parse(data);
         if (parsed.files && parsed.files['settings.json']) {
-          db = JSON.parse(parsed.files['settings.json'].content);
+          const loadedData = JSON.parse(parsed.files['settings.json'].content);
+          db = { guilds: {}, ...loadedData };
+          if (!db.guilds) db.guilds = {};
           console.log('Successfully synced settings from GitHub Gist.');
         }
       } catch (err) {
@@ -107,6 +109,9 @@ function saveGist() {
 }
 
 function getGuildConfig(guildId) {
+  if (!db || typeof db !== 'object') db = { guilds: {} };
+  if (!db.guilds) db.guilds = {};
+  
   if (!db.guilds[guildId]) {
     db.guilds[guildId] = {
       logChannel: null,
@@ -309,6 +314,7 @@ client.on('messageCreate', async (message) => {
 // INTERACTION HANDLER
 // ==========================================
 client.on('interactionCreate', async (interaction) => {
+  if (!interaction.guildId) return;
   const cfg = getGuildConfig(interaction.guildId);
 
   // ----------------------------------------
