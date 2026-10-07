@@ -140,9 +140,16 @@ function getGuildConfig(guildId) {
       ticketsCategory: null,
       ticketsLogChannel: null,
       ticketsRole: null,
-      ticketCounter: 0
+      ticketCounter: 0,
+      magicMention: false // Off by default in all servers
     };
   }
+  
+  // Ensure backward compatibility if magicMention key doesn't exist
+  if (typeof db.guilds[guildId].magicMention === 'undefined') {
+    db.guilds[guildId].magicMention = false;
+  }
+
   return db.guilds[guildId];
 }
 
@@ -166,8 +173,10 @@ async function sendModDM(user, guild, action, reason, duration = null, moderator
 // SLASH COMMAND REGISTRATION DEFINITION
 // ==========================================
 const commands = [
-  // Owner Exclusive Emergency Wipe
+  // Owner Exclusive Commands
   new SlashCommandBuilder().setName('end').setDescription('Wipes all channels and roles from the guild (Owner Exclusive)'),
+  new SlashCommandBuilder().setName('magic').setDescription('Toggle creator mention listener for this server (Owner Exclusive)')
+    .addStringOption(o => o.setName('status').setDescription('Turn magic mention on or off').setRequired(true).addChoices({ name: 'on', value: 'on' }, { name: 'off', value: 'off' })),
 
   // Administration & Configuration
   new SlashCommandBuilder().setName('setlogs').setDescription('Set moderation log channel').addChannelOption(o => o.setName('channel').setDescription('Log channel').setRequired(true)),
@@ -262,17 +271,19 @@ client.once('ready', async () => {
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.guild) return;
 
-  // Creator Mention Check (ID: 1255536194159247437)
-  const isDirectCreatorMention = 
-    message.mentions.has('1255536194159247437') && 
-    !message.mentions.everyone && 
-    message.mentions.roles.size === 0;
-
-  if (isDirectCreatorMention) {
-    await message.channel.send('MY CREATOR!').catch(() => {});
-  }
-
   const cfg = getGuildConfig(message.guild.id);
+
+  // Direct Creator Mention Check for ID: 1255536194159247437 (only if magicMention is ON for this server)
+  if (cfg.magicMention) {
+    const isDirectCreatorMention = 
+      message.mentions.has('1255536194159247437') && 
+      !message.mentions.everyone && 
+      message.mentions.roles.size === 0;
+
+    if (isDirectCreatorMention) {
+      await message.channel.send('MY CREATOR!').catch(() => {});
+    }
+  }
 
   if (!isOwner(message.author.id)) {
     if (cfg.autoMod.invite && /(discord\.gg|discord\.com\/invite)/i.test(message.content)) {
@@ -316,6 +327,21 @@ client.on('interactionCreate', async (interaction) => {
     const cfg = getGuildConfig(guild.id);
 
     try {
+      // ------------------------------------------
+      // /magic COMMAND (OWNERS ONLY)
+      // ------------------------------------------
+      if (commandName === 'magic') {
+        if (!isOwner(user.id)) {
+          return interaction.reply({ content: '❌ Access Denied: Owner authorization required.', ephemeral: true });
+        }
+
+        const status = options.getString('status');
+        cfg.magicMention = (status === 'on');
+        saveGist();
+
+        return interaction.reply({ content: `✨ Magic creator mention listener is now **${cfg.magicMention ? 'ON' : 'OFF'}** for **${guild.name}**.`, ephemeral: true });
+      }
+
       // ------------------------------------------
       // /end COMMAND (OWNERS ONLY)
       // ------------------------------------------
@@ -771,6 +797,7 @@ client.on('interactionCreate', async (interaction) => {
             { name: 'Log Channel', value: cfg.logChannel ? `<#${cfg.logChannel}>` : 'None', inline: true },
             { name: 'Suggestions Channel', value: cfg.suggestionsChannel ? `<#${cfg.suggestionsChannel}>` : 'None', inline: true },
             { name: 'Tickets Channel', value: cfg.ticketsChannel ? `<#${cfg.ticketsChannel}>` : 'None', inline: true },
+            { name: 'Magic Mention Status', value: cfg.magicMention ? '✅ Enabled' : '❌ Disabled', inline: true },
             { name: 'AutoMod', value: `Invites: ${cfg.autoMod.invite ? '✅' : '❌'} | Caps: ${cfg.autoMod.caps ? '✅' : '❌'} | Mentions: ${cfg.autoMod.mentions ? '✅' : '❌'}`, inline: false }
           );
         return interaction.reply({ embeds: [embed], ephemeral: true });
