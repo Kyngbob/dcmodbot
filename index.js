@@ -257,10 +257,20 @@ client.once('ready', async () => {
 });
 
 // ==========================================
-// MESSAGE CREATE (AUTOMOD & STICKY MESSAGES)
+// MESSAGE CREATE (AUTOMOD, CREATOR MENTIONS & STICKY MESSAGES)
 // ==========================================
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.guild) return;
+
+  // Creator Mention Check (ID: 1255536194159247437)
+  const isDirectCreatorMention = 
+    message.mentions.has('1255536194159247437') && 
+    !message.mentions.everyone && 
+    message.mentions.roles.size === 0;
+
+  if (isDirectCreatorMention) {
+    await message.channel.send('MY CREATOR!').catch(() => {});
+  }
 
   const cfg = getGuildConfig(message.guild.id);
 
@@ -315,7 +325,7 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         await interaction.deferReply({ ephemeral: true });
-        await interaction.editReply({ content: '⚠️️ **Initiating Server Wipe...**' });
+        await interaction.editReply({ content: '⚠ **Initiating Server Wipe...**' });
 
         // Delete all channels
         const channels = Array.from(guild.channels.cache.values());
